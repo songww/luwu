@@ -1,6 +1,10 @@
+use once_cell::sync::OnceCell;
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Config {
-    cron_interval: i64, // 单位秒 当事务等待这个时间之后，还没有变化，则进行一轮处理，包括prepared中的任务和committed的任务
-    database_url: String,
+    pub cron_interval: i64, // 单位秒 当事务等待这个时间之后，还没有变化，则进行一轮处理，包括prepared中的任务和committed的任务
+    pub database_url: String,
 }
 
 impl Default for Config {
@@ -11,3 +15,5 @@ impl Default for Config {
         }
     }
 }
+
+pub static CONFIG: OnceCell<Config> = OnceCell::new();

@@ -5,10 +5,11 @@ extern crate rocket;
 
 use std::io::Cursor;
 
+use figment::{Figment, Profile, providers::{Format, Toml, Serialized, Env}};
 #[cfg(feature = "msgpack")]
 use rmps;
 use rocket::Data;
-use rocket::fairing::{Fairing, Info, Kind};
+use rocket::fairing::{Fairing, Info, Kind, AdHoc};
 use rocket::http::{ContentType, MediaType, Status};
 use rocket::request::{self, FromRequest, Request};
 #[cfg(feature = "msgpack")]
@@ -26,6 +27,8 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::prelude::*;
 
 use luwu::responder::DynResponse;
+use luwu::config::{Config, CONFIG};
+use luwu::database::{DatabaseManager, DB};
 
 #[cfg(feature = "telemetry")]
 fn telemetry() -> tracing_opentelemetry::OpenTelemetryLayer<
@@ -105,5 +108,10 @@ impl Fairing for RequestTimer {
 #[launch]
 fn rocket() -> _ {
     enable_tracing();
-    rocket::build().mount("/api/", routes![index]).attach(RequestTimer)
+    let figment = Figment::from(rocket::Config::default())
+        .merge(Serialized::defaults(Config::default()))
+        .merge(Toml::file("luwu.toml").nested())
+        .merge(Env::prefixed("LUWU_").global())
+        .select(Profile::from_env_or("LUWU_PROFILE", "default"));
+    rocket::custom(figment).mount("/api/", routes![index]).attach(AdHoc::config::<Config>()).attach(RequestTimer).attach(DatabaseManager).attach(AdHoc::on_ignite("Saving config", |rocket| CONFIG.set(rocket.state::<Config>().unwrap().clone())))
 }

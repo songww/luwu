@@ -5,23 +5,50 @@ use chrono::Duration;
 use chrono::prelude::*;
 use quaint::pooled::PooledConnection;
 use quaint::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, event, Level};
 
+use crate::config::CONFIG;
 use crate::errors;
 
-pub type Gid = uuid::Uuid;
+pub type Gid = rocket::serde::uuid::Uuid;
 
 type Conn = PooledConnection;
 
 pub static CREATORS: Mutex<HashMap<String, Box<dyn Fn(&Transaction) -> Box<dyn Processor>>>> = Mutex::new(HashMap::new());
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TransactionCreation {
+    r#type: String,
+    payload: String,
+    query_prepared: String,
+}
+
+impl From<TransactionCreation> for Transaction {
+    fn from(c: TransactionCreation) -> Self {
+        Transaction {
+            gid: Gid::new_v4(),
+            state: State::Prepared,
+            r#type: c.r#type,
+            payload: c.payload,
+            query_prepared: c.query_prepared,
+            committed_at: None,
+            finished_at: None,
+            rollbacked_at: None,
+            next_cron_time: None,
+            next_cron_interval: -1,
+            created_at: Local::now(),
+            last_modified: Local::now(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Transaction {
     gid: Gid,
     state: State,
     r#type: String,
-    message: String,
+    payload: String,
     query_prepared: String,
     committed_at: Option<DateTime<Local>>,
     finished_at: Option<DateTime<Local>>,
@@ -37,7 +64,7 @@ impl Transaction {
         Transaction {
             gid: Gid::new_v4(),
             r#type: "".to_string(),
-            message: "".to_string(),
+            payload: "".to_string(),
             state: State::Prepared,
             query_prepared: "".to_string(),
             committed_at: None,
@@ -58,21 +85,35 @@ impl Transaction {
         self.gid
     }
 
-    pub fn message(&self) -> &str {
-        &self.message
+    pub fn payload(&self) -> &str {
+        &self.payload
     }
 
     pub fn state(&self) -> State {
         self.state
     }
 
+    pub fn r#type(&self) -> &str {
+        &self.r#type
+    }
+
+    pub fn submitted(&mut self) {
+        self.state = State::Submitted;
+    }
+
+    pub async fn branches(&self, db: &Conn) -> Result<Vec<TransactionBranch>, errors::Error> {
+        let branches = quaint::serde::from_rows(db.select(Select::from_table(TransactionBranch::tablename()).so_that("gid".equals(self.gid))).await?)?;
+        Ok(branches)
+    }
+
     fn set_next_cron(&mut self, expire_in: i64) {
+        let config = CONFIG.get().unwrap();
         self.next_cron_interval = expire_in;
         let next_cron_time = Local::now() + Duration::seconds(config.cron_interval);
         self.next_cron_time.replace(next_cron_time);
     }
 
-    async fn touch(&mut self, db: &Conn, interval: i64) -> Result<(), errors::Error> {
+    pub async fn touch(&mut self, db: &Conn, interval: i64) -> Result<(), errors::Error> {
         event!(Level::TRACE, action = "touch transaction", gid = ?self.gid, state = "", branch = "");
         self.set_next_cron(interval);
         let next_cron_time: DateTime<Utc> = self.next_cron_time.as_ref().unwrap().with_timezone(&Utc);
@@ -95,6 +136,7 @@ impl Transaction {
 
     pub async fn update_state(&mut self, db: &Conn, state: State) -> Result<(), errors::Error> {
         event!(Level::TRACE, gid = ?self.gid, action= "change state", state= ?state, branch= "");
+        let config = CONFIG.get().unwrap();
         let old = self.state;
         self.set_next_cron(config.cron_interval);
         let next_cron_time: DateTime<Utc> = self.next_cron_time.as_ref().unwrap().with_timezone(&Utc);
@@ -122,12 +164,12 @@ impl Transaction {
         Ok(())
     }
 
-    fn processor(&self) -> Box<dyn Processor> {
+    pub fn processor(&self) -> Box<dyn Processor> {
 	    return CREATORS.lock().unwrap().get_mut(&self.r#type).unwrap()(&self);
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Serialize)]
 #[repr(i64)]
 pub enum State {
     Succeed = 1,
@@ -143,12 +185,12 @@ impl From<State> for Value<'static> {
     }
 }
 
-// TransBranch branch transaction
-#[derive(Debug, Deserialize)]
+// branch transaction
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TransactionBranch {
     gid: Gid,
     url: String,
-    message: String,
+    payload: String,
     branch_id: Gid,
     r#type: String,
     state: State,
@@ -163,8 +205,8 @@ impl TransactionBranch {
         "tx_transaction_branches"
     }
 
-    pub fn new(gid: Gid, branch_id: uuid::Uuid, r#type: String, state: State, url: String, message: String, ) -> TransactionBranch {
-        TransactionBranch { gid, branch_id, state, r#type, url, message, finished_at: None, rollbacked_at: None, created_at: Local::now(), last_modified: Local::now() }
+    pub fn new(gid: Gid, branch_id: uuid::Uuid, r#type: String, state: State, url: String, payload: String, ) -> TransactionBranch {
+        TransactionBranch { gid, branch_id, state, r#type, url, payload, finished_at: None, rollbacked_at: None, created_at: Local::now(), last_modified: Local::now() }
     }
 
     pub fn r#type(&self) -> &str {
@@ -179,11 +221,15 @@ impl TransactionBranch {
         &self.url
     }
 
-    pub fn message(&self) -> &str {
-        &self.message
+    pub fn payload(&self) -> &str {
+        &self.payload
     }
 
-    async fn update_state(&mut self, db: &Conn, state: State) -> Result<(), errors::Error> {
+    pub fn with_type(&mut self, r#type: String) {
+        self.r#type = r#type;
+    }
+
+    pub async fn update_state(&mut self, db: &Conn, state: State) -> Result<(), errors::Error> {
         event!(Level::DEBUG, gid= ?self.gid, action= "branch change state", state= ?state, branch_id= ?self.branch_id);
         let now = Local::now();
         let finished_at: DateTime<Utc> = now.with_timezone(&Utc);
@@ -215,7 +261,7 @@ pub fn add_processor_creator(r#type: String, creator: Box<dyn Fn(&Transaction) -
 
 impl Transaction {
     // Process process global transaction once
-    async fn process(&mut self, db: &Conn) -> Result<(), errors::Error> {
+    pub async fn process(&mut self, db: &Conn) -> Result<(), errors::Error> {
     	debug!("processing: {} state: {:?}", self.gid, self.state);
         let _defer = Defer::new(Box::new({
             let gid = self.gid.clone();
@@ -237,7 +283,7 @@ impl Transaction {
         Ok(())
     }
 
-    fn get_branch_params(&self, branch: &TransactionBranch) -> HashMap<String, uuid::Uuid> {
+    pub fn get_branch_params(&self, branch: &TransactionBranch) -> HashMap<String, uuid::Uuid> {
         let mut params = HashMap::with_capacity(4);
         params.insert("gid".to_string(),         self.gid);
         // params.insert("trans_type",  self.r#type);
@@ -247,10 +293,11 @@ impl Transaction {
         params
     }
 
-    async fn save(&mut self, db: Conn) -> Result<(), errors::Error> {
+    pub async fn save(&mut self, db: &Conn) -> Result<(), errors::Error> {
+        let config = CONFIG.get().unwrap();
         let db = db.start_transaction().await?;
 		    self.set_next_cron(config.cron_interval);
-		    event!(Level::DEBUG, gid = ?self.gid, action = "create transaction", state = ?self.state, branch = "", data = self.data.into());
+		    event!(Level::DEBUG, gid = ?self.gid, action = "create transaction", state = ?self.state, branch = "", payload = ?self.payload);
             // r#type: String,
             // data: String,
             // state: State,
@@ -262,12 +309,12 @@ impl Transaction {
             // next_cron_time: Option<DateTime<Local>>,
             // created_at: DateTime<Local>,
             // last_modified: DateTime<Local>,
-            let insertion = Insert::single_into(Transaction::tablename()).value("gid", self.gid).value("data", self.data).build().on_conflict(OnConflict::DoNothing);
+            let insertion = Insert::single_into(Transaction::tablename()).value("gid", self.gid).value("payload", self.payload.as_str()).build().on_conflict(OnConflict::DoNothing);
             let set = db.insert(insertion).await?;
             if !set.is_empty() { // 如果这个是新事务，保存所有的分支
 			    let branches = self.processor().branches();
 			    if !branches.is_empty() {
-				    event!(Level::DEBUG, gid = ?self.gid, action = "save branches", state = ?self.state, data = ?branches);
+				    event!(Level::DEBUG, gid = ?self.gid, action = "save branches", state = ?self.state, payload = ?branches);
                     // gid: Gid,
                     // url: String,
                     // data: String,
@@ -278,9 +325,9 @@ impl Transaction {
                     // rollbacked_at: DateTime<Local>,
                     // created_at: DateTime<Local>,
                     // last_modified: DateTime<Local>,
-                    let insertion = Insert::multi_into(TransactionBranch::tablename(), vec!["gid", "data", "branch_id", "type", "state"]);
+                    let mut insertion = Insert::multi_into(TransactionBranch::tablename(), vec!["gid", "data", "branch_id", "type", "state"]);
                     for branch in branches.iter() {
-                        insertion = insertion.values((branch.gid, branch.data, branch.branch_id, branch.r#type, branch.state))
+                        insertion = insertion.values((branch.gid, branch.payload.clone(), branch.branch_id, branch.r#type.clone(), branch.state))
                     }
                     let insertion = insertion.build().on_conflict(OnConflict::DoNothing);
                     db.insert(insertion).await?;
@@ -296,9 +343,9 @@ impl Transaction {
     }
 
     // TransFromDb construct trans from db
-    async fn load(gid: Gid, db: Conn) -> Result<Transaction, errors::Error> {
+    pub async fn load(gid: Gid, db: &Conn) -> Result<Transaction, errors::Error> {
         let q = Select::from_table(Transaction::tablename()).so_that("gid".equals(gid)).limit(1);
-        db.select(q).await?.from_first()
+        Ok(db.select(q).await?.from_first()?)
         /*
 	        if dbr.Error == gorm.ErrRecordNotFound {
 	        	return nil

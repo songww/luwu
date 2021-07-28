@@ -9,7 +9,10 @@ edition = "2021"
 
 [dependencies]
 chrono = { version = "0.4", features = [ "serde" ] }
+derive_more = { version = "0.99", default-features = false, features = [ "from", "into", "as_ref", "as_mut", "deref", "deref_mut" ] }
+figment = "0.10.6"
 log = "0.4"
+once_cell = "1.8.0"
 opentelemetry = { version = "0.15", optional = true }
 quaint = { git = "https://github.com/prisma/quaint/", features = [ "postgresql", "pooled", "serde-support", "chrono", "json", "uuid" ] }
 rand = "0.8"
@@ -21,6 +24,7 @@ rocket-versioning = "0.1"
 serde = { version = "1.0", features = [ "derive" ] }
 serde_json = "1.0"
 thiserror = "1.0"
+tokio = "1.9.0"
 # sqlx = { version = "^0.5", features = [ "uuid, runtime-tokio, postgres, json, chrono" ] }
 tracing = "0.1"
 tracing-appender = "0.1"
