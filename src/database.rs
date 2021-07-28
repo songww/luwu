@@ -1,6 +1,6 @@
-use rocket::request::{self, Request, FromRequest};
 use rocket::fairing::{Fairing, Info, Kind};
 use rocket::http::Status;
+use rocket::request::{self, FromRequest, Request};
 
 use crate::config::Config;
 
@@ -12,7 +12,7 @@ impl Fairing for DatabaseManager {
     fn info(&self) -> Info {
         Info {
             name: "Database connection manager.",
-            kind: Kind::Liftoff
+            kind: Kind::Liftoff,
         }
     }
 
@@ -20,7 +20,6 @@ impl Fairing for DatabaseManager {
         println!("-------> config: {:?}", rocket.state::<Config>());
     }
 }
-
 
 pub type Conn = quaint::pooled::PooledConnection;
 
@@ -34,13 +33,11 @@ impl<'r> FromRequest<'r> for DB {
     async fn from_request(request: &'r Request<'_>) -> request::Outcome<Self, Self::Error> {
         let outcome = request.guard::<&rocket::State<DatabaseManager>>().await;
         match outcome {
-            request::Outcome::Success(manager) => {
-                match manager.check_out().await {
-                    Ok(conn) => request::Outcome::Success(DB(conn)),
-                    Err(err) => request::Outcome::Failure((Status::ServiceUnavailable, err))
-                }
+            request::Outcome::Success(manager) => match manager.check_out().await {
+                Ok(conn) => request::Outcome::Success(DB(conn)),
+                Err(err) => request::Outcome::Failure((Status::ServiceUnavailable, err)),
             },
-            out @ _ => { out }
+            out @ _ => out,
         }
     }
 }

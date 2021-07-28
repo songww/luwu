@@ -2,29 +2,29 @@ use quaint::pooled::PooledConnection;
 
 use crate::errors;
 
-use super::transaction::{add_processor_creator, Processor, Transaction, TransactionBranch, State};
+use super::transaction::{add_processor_creator, Processor, State, Transaction, TransactionBranch};
 
 type Conn = PooledConnection;
 
 struct TxTCCProcessor<'tx> {
-	tx: &'tx Transaction
+    tx: &'tx Transaction,
 }
 
 impl<'tx> TxTCCProcessor<'tx> {
-    pub fn regist {
-	    add_processor_creator("tcc".to_string(), 
+    pub fn regist() {
+        add_processor_creator(
+            "tcc".to_string(),
             |tx: &Transaction| -> Box<dyn Processor> {
                 return &TxTCCProcessor { tx };
             }
             .into(),
-            );     
+        );
     }
 }
 
 #[async_trait]
 impl<'tx> Processor for TxTCCProcessor<'tx> {
-
-    fn branches() Vec<TransactionBranch> {
+    fn branches() -> Vec<TransactionBranch> {
         Vec::new()
     }
 
@@ -33,19 +33,25 @@ impl<'tx> Processor for TxTCCProcessor<'tx> {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("content-type", "application/json");
         headers.insert("accept", "application/json");
-        let resp = cli.post(branch.url()).body(branch.message()).headers(headers).send().await?.json::<HashMap<String, serde_json::Value>>();
-	    // resp, err := common.RestyClient.R().SetBody(branch.Data).SetHeader("Content-type", "application/json").SetQueryParams(t.getBranchParams(branch)).Post(branch.URL)
+        let resp = cli
+            .post(branch.url())
+            .body(branch.message())
+            .headers(headers)
+            .send()
+            .await?
+            .json::<HashMap<String, serde_json::Value>>();
+        // resp, err := common.RestyClient.R().SetBody(branch.Data).SetHeader("Content-type", "application/json").SetQueryParams(t.getBranchParams(branch)).Post(branch.URL)
         /*
-	    body := resp.String()
-	    if strings.Contains(body, "SUCCESS") {
-	    	t.touch(db, config.TransCronInterval)
-	    	branch.changeStatus(db, "succeed")
-	    } else if branch.BranchType == "try" && strings.Contains(body, "FAILURE") {
-	    	t.touch(db, config.TransCronInterval)
-	    	branch.changeStatus(db, "failed")
-	    } else {
-	    	panic(fmt.Errorf("unknown response: %s, will be retried", body))
-	    }
+        body := resp.String()
+        if strings.Contains(body, "SUCCESS") {
+            t.touch(db, config.TransCronInterval)
+            branch.changeStatus(db, "succeed")
+        } else if branch.BranchType == "try" && strings.Contains(body, "FAILURE") {
+            t.touch(db, config.TransCronInterval)
+            branch.changeStatus(db, "failed")
+        } else {
+            panic(fmt.Errorf("unknown response: %s, will be retried", body))
+        }
         */
         Ok(())
     }
@@ -54,13 +60,9 @@ impl<'tx> Processor for TxTCCProcessor<'tx> {
         let r#type = match self.tx.state {
             State::succeed | State::Failed => {
                 return Ok(());
-            },
-            State::Submitted => {
-                "confirm"
-            },
-            _ => {
-                "cancel"
             }
+            State::Submitted => "confirm",
+            _ => "cancel",
         };
         for branch in branches.iter().rev() {
             if branch.r#type() == r#type {
@@ -68,13 +70,10 @@ impl<'tx> Processor for TxTCCProcessor<'tx> {
             }
         }
         let state = match self.tx.state {
-            State::Submitted => {
-                State::Succeed
-            }, _ => {
-                State::Failed
-            }
+            State::Submitted => State::Succeed,
+            _ => State::Failed,
         };
-		// 已全部处理完
-		self.tx.update_state(db, state);
-	}
+        // 已全部处理完
+        self.tx.update_state(db, state);
+    }
 }

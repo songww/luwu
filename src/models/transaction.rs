@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use chrono::Duration;
 use chrono::prelude::*;
+use chrono::Duration;
 use quaint::pooled::PooledConnection;
 use quaint::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -15,7 +15,8 @@ pub type Gid = rocket::serde::uuid::Uuid;
 
 type Conn = PooledConnection;
 
-pub static CREATORS: Mutex<HashMap<String, Box<dyn Fn(&Transaction) -> Box<dyn Processor>>>> = Mutex::new(HashMap::new());
+pub static CREATORS: Mutex<HashMap<String, Box<dyn Fn(&Transaction) -> Box<dyn Processor>>>> =
+    Mutex::new(HashMap::new());
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct TransactionCreation {
@@ -102,7 +103,12 @@ impl Transaction {
     }
 
     pub async fn branches(&self, db: &Conn) -> Result<Vec<TransactionBranch>, errors::Error> {
-        let branches = quaint::serde::from_rows(db.select(Select::from_table(TransactionBranch::tablename()).so_that("gid".equals(self.gid))).await?)?;
+        let branches = quaint::serde::from_rows(
+            db.select(
+                Select::from_table(TransactionBranch::tablename()).so_that("gid".equals(self.gid)),
+            )
+            .await?,
+        )?;
         Ok(branches)
     }
 
@@ -116,7 +122,8 @@ impl Transaction {
     pub async fn touch(&mut self, db: &Conn, interval: i64) -> Result<(), errors::Error> {
         event!(Level::TRACE, action = "touch transaction", gid = ?self.gid, state = "", branch = "");
         self.set_next_cron(interval);
-        let next_cron_time: DateTime<Utc> = self.next_cron_time.as_ref().unwrap().with_timezone(&Utc);
+        let next_cron_time: DateTime<Utc> =
+            self.next_cron_time.as_ref().unwrap().with_timezone(&Utc);
         let x = Update::table(Self::tablename())
             .set("next_cron_time", next_cron_time)
             .set("next_cron_interval", self.next_cron_interval)
@@ -139,7 +146,8 @@ impl Transaction {
         let config = CONFIG.get().unwrap();
         let old = self.state;
         self.set_next_cron(config.cron_interval);
-        let next_cron_time: DateTime<Utc> = self.next_cron_time.as_ref().unwrap().with_timezone(&Utc);
+        let next_cron_time: DateTime<Utc> =
+            self.next_cron_time.as_ref().unwrap().with_timezone(&Utc);
         let mut x = Update::table(Self::tablename())
             .set("next_cron_time", next_cron_time)
             .set("next_cron_interval", self.next_cron_interval)
@@ -149,12 +157,14 @@ impl Transaction {
         match state {
             State::Succeed => {
                 self.finished_at = Some(now);
-                let finished_at: DateTime<Utc> = self.finished_at.as_ref().unwrap().with_timezone(&Utc);
+                let finished_at: DateTime<Utc> =
+                    self.finished_at.as_ref().unwrap().with_timezone(&Utc);
                 x = x.set("finished_at", finished_at);
             }
             State::Failed => {
                 self.rollbacked_at = Some(now);
-                let rollbacked_at: DateTime<Utc> = self.rollbacked_at.as_ref().unwrap().with_timezone(&Utc);
+                let rollbacked_at: DateTime<Utc> =
+                    self.rollbacked_at.as_ref().unwrap().with_timezone(&Utc);
                 x = x.set("rollbacked_at", rollbacked_at);
             }
             _ => {}
@@ -165,7 +175,7 @@ impl Transaction {
     }
 
     pub fn processor(&self) -> Box<dyn Processor> {
-	    return CREATORS.lock().unwrap().get_mut(&self.r#type).unwrap()(&self);
+        return CREATORS.lock().unwrap().get_mut(&self.r#type).unwrap()(&self);
     }
 }
 
@@ -205,8 +215,26 @@ impl TransactionBranch {
         "tx_transaction_branches"
     }
 
-    pub fn new(gid: Gid, branch_id: uuid::Uuid, r#type: String, state: State, url: String, payload: String, ) -> TransactionBranch {
-        TransactionBranch { gid, branch_id, state, r#type, url, payload, finished_at: None, rollbacked_at: None, created_at: Local::now(), last_modified: Local::now() }
+    pub fn new(
+        gid: Gid,
+        branch_id: uuid::Uuid,
+        r#type: String,
+        state: State,
+        url: String,
+        payload: String,
+    ) -> TransactionBranch {
+        TransactionBranch {
+            gid,
+            branch_id,
+            state,
+            r#type,
+            url,
+            payload,
+            finished_at: None,
+            rollbacked_at: None,
+            created_at: Local::now(),
+            last_modified: Local::now(),
+        }
     }
 
     pub fn r#type(&self) -> &str {
@@ -235,10 +263,15 @@ impl TransactionBranch {
         let finished_at: DateTime<Utc> = now.with_timezone(&Utc);
         db.update(
             Update::table(TransactionBranch::tablename())
-            .set("state", state)
-            .set("finished_at", finished_at)
-            .so_that("gid".equals(self.gid).and("branch_id".equals(self.branch_id)))
-        ).await?;
+                .set("state", state)
+                .set("finished_at", finished_at)
+                .so_that(
+                    "gid"
+                        .equals(self.gid)
+                        .and("branch_id".equals(self.branch_id)),
+                ),
+        )
+        .await?;
         self.finished_at = Some(now);
         self.state = state;
         Ok(())
@@ -247,30 +280,34 @@ impl TransactionBranch {
 
 #[async_trait]
 pub trait Processor {
-	fn branches(&self) -> Vec<TransactionBranch>;
-	async fn once(&self, db: &Conn, branches: &[TransactionBranch]) -> Result<(), errors::Error>;
-	async fn exec(&self, db: &Conn, branch: &TransactionBranch) -> Result<(), errors::Error>;
+    fn branches(&self) -> Vec<TransactionBranch>;
+    async fn once(&self, db: &Conn, branches: &[TransactionBranch]) -> Result<(), errors::Error>;
+    async fn exec(&self, db: &Conn, branch: &TransactionBranch) -> Result<(), errors::Error>;
 }
 
 // type ProcessorCreator = ;
 
 // var processorFac = map[string]processorCreator{}
-pub fn add_processor_creator(r#type: String, creator: Box<dyn Fn(&Transaction) -> Box<dyn Processor>>) {
-	CREATORS.lock().unwrap().insert(r#type, creator);
+pub fn add_processor_creator(
+    r#type: String,
+    creator: Box<dyn Fn(&Transaction) -> Box<dyn Processor>>,
+) {
+    CREATORS.lock().unwrap().insert(r#type, creator);
 }
 
 impl Transaction {
     // Process process global transaction once
     pub async fn process(&mut self, db: &Conn) -> Result<(), errors::Error> {
-    	debug!("processing: {} state: {:?}", self.gid, self.state);
+        debug!("processing: {} state: {:?}", self.gid, self.state);
         let _defer = Defer::new(Box::new({
             let gid = self.gid.clone();
-            move||{
-    		// if TransProcessedTestChan != nil {
-    			debug!("processed: {}", gid);
-    		//   TransProcessedTestChan <- t.Gid
-    		// }
-        }}));
+            move || {
+                // if TransProcessedTestChan != nil {
+                debug!("processed: {}", gid);
+                //   TransProcessedTestChan <- t.Gid
+                // }
+            }
+        }));
         match (self.state, self.r#type.as_str()) {
             (State::Prepared, "msg") => {
                 self.update_state(db, State::Aborting).await?;
@@ -278,17 +315,22 @@ impl Transaction {
             _ => {}
         };
         let branches: Vec<TransactionBranch> = quaint::serde::from_rows(
-            db.select(Select::from_table(TransactionBranch::tablename()).so_that("gid".equals(self.gid)).order_by("id".ascend())).await?)?;
-    	self.processor().once(db, &branches);
+            db.select(
+                Select::from_table(TransactionBranch::tablename())
+                    .so_that("gid".equals(self.gid))
+                    .order_by("id".ascend()),
+            )
+            .await?,
+        )?;
+        self.processor().once(db, &branches);
         Ok(())
     }
 
     pub fn get_branch_params(&self, branch: &TransactionBranch) -> HashMap<String, uuid::Uuid> {
         let mut params = HashMap::with_capacity(4);
-        params.insert("gid".to_string(),         self.gid);
+        params.insert("gid".to_string(), self.gid);
         // params.insert("trans_type",  self.r#type);
-        params.insert(
-    		"branch_id".to_string(),   branch.branch_id);
+        params.insert("branch_id".to_string(), branch.branch_id);
         // params.insert("branch_type", branch.r#type);
         params
     }
@@ -296,62 +338,84 @@ impl Transaction {
     pub async fn save(&mut self, db: &Conn) -> Result<(), errors::Error> {
         let config = CONFIG.get().unwrap();
         let db = db.start_transaction().await?;
-		    self.set_next_cron(config.cron_interval);
-		    event!(Level::DEBUG, gid = ?self.gid, action = "create transaction", state = ?self.state, branch = "", payload = ?self.payload);
-            // r#type: String,
-            // data: String,
-            // state: State,
-            // query_prepared: String,
-            // committed_at: Option<DateTime<Local>>,
-            // finished_at: Option<DateTime<Local>>,
-            // rollbacked_at: Option<DateTime<Local>>,
-            // next_cron_interval: i64,
-            // next_cron_time: Option<DateTime<Local>>,
-            // created_at: DateTime<Local>,
-            // last_modified: DateTime<Local>,
-            let insertion = Insert::single_into(Transaction::tablename()).value("gid", self.gid).value("payload", self.payload.as_str()).build().on_conflict(OnConflict::DoNothing);
-            let set = db.insert(insertion).await?;
-            if !set.is_empty() { // 如果这个是新事务，保存所有的分支
-			    let branches = self.processor().branches();
-			    if !branches.is_empty() {
-				    event!(Level::DEBUG, gid = ?self.gid, action = "save branches", state = ?self.state, payload = ?branches);
-                    // gid: Gid,
-                    // url: String,
-                    // data: String,
-                    // branch_id: Gid,
-                    // r#type: String,
-                    // state: State,
-                    // finished_at: DateTime<Local>,
-                    // rollbacked_at: DateTime<Local>,
-                    // created_at: DateTime<Local>,
-                    // last_modified: DateTime<Local>,
-                    let mut insertion = Insert::multi_into(TransactionBranch::tablename(), vec!["gid", "data", "branch_id", "type", "state"]);
-                    for branch in branches.iter() {
-                        insertion = insertion.values((branch.gid, branch.payload.clone(), branch.branch_id, branch.r#type.clone(), branch.state))
-                    }
-                    let insertion = insertion.build().on_conflict(OnConflict::DoNothing);
-                    db.insert(insertion).await?;
-			    }
-		    } else if self.state == State::Submitted { // 如果数据库已经存放了prepared的事务，则修改状态
-                let next_cron_time: DateTime<Utc> = self.next_cron_time.as_ref().unwrap().with_timezone(&Utc);
-                let up = Update::table(Transaction::tablename()).set("next_cron_time", next_cron_time).set("next_cron_interval", self.next_cron_interval).set("state", self.state).so_that("gid".equals(self.gid));
-                db.update(up).await?;
-		    }
-            db.commit().await?;
-            Ok(())
-	// e2p(err)
+        self.set_next_cron(config.cron_interval);
+        event!(Level::DEBUG, gid = ?self.gid, action = "create transaction", state = ?self.state, branch = "", payload = ?self.payload);
+        // r#type: String,
+        // data: String,
+        // state: State,
+        // query_prepared: String,
+        // committed_at: Option<DateTime<Local>>,
+        // finished_at: Option<DateTime<Local>>,
+        // rollbacked_at: Option<DateTime<Local>>,
+        // next_cron_interval: i64,
+        // next_cron_time: Option<DateTime<Local>>,
+        // created_at: DateTime<Local>,
+        // last_modified: DateTime<Local>,
+        let insertion = Insert::single_into(Transaction::tablename())
+            .value("gid", self.gid)
+            .value("payload", self.payload.as_str())
+            .build()
+            .on_conflict(OnConflict::DoNothing);
+        let set = db.insert(insertion).await?;
+        if !set.is_empty() {
+            // 如果这个是新事务，保存所有的分支
+            let branches = self.processor().branches();
+            if !branches.is_empty() {
+                event!(Level::DEBUG, gid = ?self.gid, action = "save branches", state = ?self.state, payload = ?branches);
+                // gid: Gid,
+                // url: String,
+                // data: String,
+                // branch_id: Gid,
+                // r#type: String,
+                // state: State,
+                // finished_at: DateTime<Local>,
+                // rollbacked_at: DateTime<Local>,
+                // created_at: DateTime<Local>,
+                // last_modified: DateTime<Local>,
+                let mut insertion = Insert::multi_into(
+                    TransactionBranch::tablename(),
+                    vec!["gid", "data", "branch_id", "type", "state"],
+                );
+                for branch in branches.iter() {
+                    insertion = insertion.values((
+                        branch.gid,
+                        branch.payload.clone(),
+                        branch.branch_id,
+                        branch.r#type.clone(),
+                        branch.state,
+                    ))
+                }
+                let insertion = insertion.build().on_conflict(OnConflict::DoNothing);
+                db.insert(insertion).await?;
+            }
+        } else if self.state == State::Submitted {
+            // 如果数据库已经存放了prepared的事务，则修改状态
+            let next_cron_time: DateTime<Utc> =
+                self.next_cron_time.as_ref().unwrap().with_timezone(&Utc);
+            let up = Update::table(Transaction::tablename())
+                .set("next_cron_time", next_cron_time)
+                .set("next_cron_interval", self.next_cron_interval)
+                .set("state", self.state)
+                .so_that("gid".equals(self.gid));
+            db.update(up).await?;
+        }
+        db.commit().await?;
+        Ok(())
+        // e2p(err)
     }
 
     // TransFromDb construct trans from db
     pub async fn load(gid: Gid, db: &Conn) -> Result<Transaction, errors::Error> {
-        let q = Select::from_table(Transaction::tablename()).so_that("gid".equals(gid)).limit(1);
+        let q = Select::from_table(Transaction::tablename())
+            .so_that("gid".equals(gid))
+            .limit(1);
         Ok(db.select(q).await?.from_first()?)
         /*
-	        if dbr.Error == gorm.ErrRecordNotFound {
-	        	return nil
-	        }
-	        e2p(dbr.Error)
-	        return &m
+            if dbr.Error == gorm.ErrRecordNotFound {
+                return nil
+            }
+            e2p(dbr.Error)
+            return &m
         */
     }
 }
@@ -361,9 +425,9 @@ struct Defer {
 }
 
 impl Drop for Defer {
-        fn drop(&mut self) {
-            (self.doit)()
-        }
+    fn drop(&mut self) {
+        (self.doit)()
+    }
 }
 
 impl Defer {

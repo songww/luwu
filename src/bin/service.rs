@@ -5,20 +5,23 @@ extern crate rocket;
 
 use std::io::Cursor;
 
-use figment::{Figment, Profile, providers::{Format, Toml, Serialized, Env}};
+use figment::{
+    providers::{Env, Format, Serialized, Toml},
+    Figment, Profile,
+};
 #[cfg(feature = "msgpack")]
 use rmps;
-use rocket::Data;
-use rocket::fairing::{Fairing, Info, Kind, AdHoc};
+use rocket::fairing::{AdHoc, Fairing, Info, Kind};
 use rocket::http::{ContentType, MediaType, Status};
 use rocket::request::{self, FromRequest, Request};
-#[cfg(feature = "msgpack")]
-use rocket::response::content::MsgPack;
 #[cfg(feature = "json")]
 use rocket::response::content::Json;
+#[cfg(feature = "msgpack")]
+use rocket::response::content::MsgPack;
 use rocket::response::{self, Responder, Response};
 use rocket::serde::{Deserialize, Serialize};
 use rocket::tokio::time::Instant;
+use rocket::Data;
 #[cfg(feature = "json")]
 use serde_json;
 use tracing::{error, span};
@@ -26,9 +29,9 @@ use tracing::{error, span};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::prelude::*;
 
-use luwu::responder::DynResponse;
 use luwu::config::{Config, CONFIG};
 use luwu::database::{DatabaseManager, DB};
+use luwu::responder::DynResponse;
 
 #[cfg(feature = "telemetry")]
 fn telemetry() -> tracing_opentelemetry::OpenTelemetryLayer<
@@ -80,7 +83,7 @@ impl Fairing for RequestTimer {
     fn info(&self) -> Info {
         Info {
             name: "Request timer.",
-            kind: Kind::Request | Kind::Response
+            kind: Kind::Request | Kind::Response,
         }
     }
 
@@ -91,7 +94,12 @@ impl Fairing for RequestTimer {
         // that might store a `SystemTime` in request-local cache.
         request.local_cache(|| RequestAt(Some(Instant::now())));
         let uri = request.uri();
-        info!("begin {} {} query: {} body: ", request.method(), uri.path(), uri.query().map(|q|q.as_str()).unwrap_or(""))
+        info!(
+            "begin {} {} query: {} body: ",
+            request.method(),
+            uri.path(),
+            uri.query().map(|q| q.as_str()).unwrap_or("")
+        )
     }
 
     async fn on_response<'r>(&self, req: &'r Request<'_>, res: &mut Response<'r>) {
@@ -100,7 +108,13 @@ impl Fairing for RequestTimer {
             let ms = duration.as_millis();
             res.set_raw_header("X-Response-Time", format!("{} ms", ms));
             let uri = req.uri();
-            info!("used {} ms {} {} query: {:?} body: ", ms, req.method(), uri.path(), uri.query());
+            info!(
+                "used {} ms {} {} query: {:?} body: ",
+                ms,
+                req.method(),
+                uri.path(),
+                uri.query()
+            );
         }
     }
 }
@@ -113,5 +127,14 @@ fn rocket() -> _ {
         .merge(Toml::file("luwu.toml").nested())
         .merge(Env::prefixed("LUWU_").global())
         .select(Profile::from_env_or("LUWU_PROFILE", "default"));
-    rocket::custom(figment).mount("/api/", routes![index]).attach(AdHoc::config::<Config>()).attach(RequestTimer).attach(DatabaseManager).attach(AdHoc::on_ignite("Saving config", |rocket| CONFIG.set(rocket.state::<Config>().unwrap().clone())))
+    let routes = luwu::routes::routes();
+    rocket::custom(figment)
+        .mount("/", routes![index])
+        .mount("/api", routes)
+        .attach(AdHoc::config::<Config>())
+        .attach(RequestTimer)
+        .attach(DatabaseManager)
+        .attach(AdHoc::on_ignite("Saving config", |rocket| {
+            CONFIG.set(rocket.state::<Config>().unwrap().clone())
+        }))
 }
