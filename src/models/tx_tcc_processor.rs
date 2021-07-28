@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use quaint::pooled::PooledConnection;
 
 use crate::errors;
@@ -14,28 +16,31 @@ impl<'tx> TxTCCProcessor<'tx> {
     pub fn regist() {
         add_processor_creator(
             "tcc".to_string(),
-            |tx: &Transaction| -> Box<dyn Processor> {
-                return &TxTCCProcessor { tx };
-            }
-            .into(),
+            Box::new(|tx: &Transaction| -> Box<dyn Processor> { Box::new(TxTCCProcessor { tx }) }),
         );
     }
 }
 
 #[async_trait]
 impl<'tx> Processor for TxTCCProcessor<'tx> {
-    fn branches() -> Vec<TransactionBranch> {
+    fn branches(&self) -> Vec<TransactionBranch> {
         Vec::new()
     }
 
     async fn exec(&self, db: &Conn, branch: &TransactionBranch) -> Result<(), errors::Error> {
         let cli = reqwest::Client::new();
         let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert("content-type", "application/json");
-        headers.insert("accept", "application/json");
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            "application/json".try_into().unwrap(),
+        );
+        headers.insert(
+            reqwest::header::ACCEPT,
+            "application/json".try_into().unwrap(),
+        );
         let resp = cli
             .post(branch.url())
-            .body(branch.message())
+            .body(branch.payload().to_string())
             .headers(headers)
             .send()
             .await?
@@ -57,8 +62,8 @@ impl<'tx> Processor for TxTCCProcessor<'tx> {
     }
 
     async fn once(&self, db: &Conn, branches: &[TransactionBranch]) -> Result<(), errors::Error> {
-        let r#type = match self.tx.state {
-            State::succeed | State::Failed => {
+        let r#type = match self.tx.state() {
+            State::Succeed | State::Failed => {
                 return Ok(());
             }
             State::Submitted => "confirm",
@@ -69,11 +74,12 @@ impl<'tx> Processor for TxTCCProcessor<'tx> {
                 self.exec(db, branch).await;
             }
         }
-        let state = match self.tx.state {
+        let state = match self.tx.state() {
             State::Submitted => State::Succeed,
             _ => State::Failed,
         };
         // 已全部处理完
         self.tx.update_state(db, state);
+        Ok(())
     }
 }

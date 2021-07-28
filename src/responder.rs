@@ -2,17 +2,10 @@ use std::io::Cursor;
 
 #[cfg(feature = "msgpack")]
 use rmps;
-use rocket::fairing::{Fairing, Info, Kind};
 use rocket::http::{ContentType, MediaType, Status};
-use rocket::request::{self, FromRequest, Request};
-#[cfg(feature = "json")]
-use rocket::response::content::Json;
-#[cfg(feature = "msgpack")]
-use rocket::response::content::MsgPack;
+use rocket::request::Request;
 use rocket::response::{self, Responder, Response};
-use rocket::serde::{Deserialize, Serialize};
-use rocket::tokio::time::Instant;
-use rocket::Data;
+use rocket::serde::Serialize;
 #[cfg(feature = "json")]
 use serde_json;
 

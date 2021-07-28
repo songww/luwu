@@ -110,7 +110,7 @@ async fn create_xa_branches(
         DoNothing: true,
     }).Create(branches)
     */
-    tx.touch(db.as_ref(), config.cron_interval).await?;
+    tx.touch(db.as_ref(), config.delay).await?;
     Ok(gid.to_string())
 }
 
@@ -184,7 +184,7 @@ async fn create_tcc_branches(
         DoNothing: true,
     }).Create(branches)
     */
-    tx.touch(db.as_ref(), config.cron_interval).await?;
+    tx.touch(db.as_ref(), config.delay).await?;
     Ok("SUCCESS".to_string())
 }
 

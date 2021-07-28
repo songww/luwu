@@ -1,7 +1,5 @@
-use std::collections::HashMap;
-
 use quaint::pooled::PooledConnection;
-use serde::Deserialize;
+use serde::Serialize;
 
 use crate::errors;
 
@@ -17,25 +15,25 @@ impl<'tx> TxXaProcessor<'tx> {
     pub fn regist() {
         add_processor_creator(
             "xa".to_string(),
-            |tx: &Transaction| -> Box<dyn Processor> {
-                return &TxMessageProcessor { tx };
-            }
-            .into(),
+            Box::new(|tx: &Transaction| -> Box<dyn Processor> { Box::new(TxXaProcessor { tx }) }),
         );
     }
+}
 
-    fn branches() -> Vec<TransactionBranch> {
+#[async_trait]
+impl<'tx> Processor for TxXaProcessor<'tx> {
+    fn branches(&self) -> Vec<TransactionBranch> {
         Vec::new()
     }
 
     async fn exec(&self, db: &Conn, branch: &TransactionBranch) -> Result<(), errors::Error> {
-        #[derive(Debug, Deserialize)]
-        struct J {
+        #[derive(Debug, Serialize)]
+        struct Payload {
             gid: uuid::Uuid,
             branch_id: uuid::Uuid,
             action: String,
         }
-        let mut j = J {
+        let mut paylaod = Payload {
             branch_id: branch.branch_id(),
             gid: self.tx.gid(),
             action: match self.tx.state() {
@@ -44,7 +42,7 @@ impl<'tx> TxXaProcessor<'tx> {
             },
         };
         let cli = reqwest::Client::new();
-        let resp = cli.post(branch.url()).json(j).send().await?;
+        let resp = cli.post(branch.url()).json(&paylaod).send().await?;
         /*
         body := resp.String()
         if strings.Contains(body, "SUCCESS") {
@@ -70,13 +68,14 @@ impl<'tx> TxXaProcessor<'tx> {
                 (r#type, State::Succeed) => {
                     self.exec(db, branch).await;
                 }
+                _ => {}
             }
         }
-        let state = match self.tx.state {
-            State::Submitted => "succeed",
-            _ => "failed",
+        let state = match self.tx.state() {
+            State::Submitted => State::Succeed,
+            _ => State::Failed,
         };
-        self.update_state(db, state).await?;
+        self.tx.update_state(db, state).await?;
         Ok(())
     }
 }

@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
 use quaint::pooled::PooledConnection;
+use rocket::serde::uuid::Uuid;
+use serde::Serialize;
 
 use crate::errors;
 
@@ -16,10 +18,9 @@ impl<'tx> TxMessageProcessor<'tx> {
     pub fn regist() {
         add_processor_creator(
             "message".to_string(),
-            |tx: &Transaction| -> Box<dyn Processor> {
-                return &TxMessageProcessor { tx };
-            }
-            .into(),
+            Box::new(|tx: &Transaction| -> Box<dyn Processor> {
+                Box::new(TxMessageProcessor { tx })
+            }),
         )
     }
 }
@@ -27,7 +28,7 @@ impl<'tx> TxMessageProcessor<'tx> {
 #[async_trait]
 impl<'tx> Processor for TxMessageProcessor<'tx> {
     fn branches(&self) -> Vec<TransactionBranch> {
-        let steps: Vec<HashMap<String, String>> = serde_json::from_str(self.tx.message()).unwrap();
+        let steps: Vec<HashMap<String, String>> = serde_json::from_str(self.tx.payload()).unwrap();
         let mut branches = Vec::with_capacity(steps.len());
         for step in steps {
             branches.push(TransactionBranch::new(
@@ -45,15 +46,22 @@ impl<'tx> Processor for TxMessageProcessor<'tx> {
     async fn exec(&self, db: &Conn, branch: &TransactionBranch) -> Result<(), errors::Error> {
         let mut cli = reqwest::Client::new();
         let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert("content-type", "application/json");
-        headers.insert("accept", "application/json");
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            "application/json".try_into().unwrap(),
+        );
+        headers.insert(
+            reqwest::header::ACCEPT,
+            "application/json".try_into().unwrap(),
+        );
         let resp = cli
             .post(branch.url())
-            .body(branch.message())
+            .body(branch.payload().to_string())
             .headers(headers)
             .send()
             .await?
-            .json::<HashMap<String, serde_json::Value>>();
+            .json::<HashMap<String, serde_json::Value>>()
+            .await?;
         dbg!(&resp);
         /*
         body := resp.String()
@@ -103,7 +111,7 @@ impl<'tx> Processor for TxMessageProcessor<'tx> {
 }
 
 impl<'a> TxMessageProcessor<'a> {
-    async fn maybe_query_prepared(&self, db: &Conn) -> Result<bool, ()> {
+    async fn maybe_query_prepared(&self, db: &Conn) -> Result<bool, errors::Error> {
         match self.tx.state() {
             State::Prepared => {
                 // Only accept this.
@@ -113,9 +121,13 @@ impl<'a> TxMessageProcessor<'a> {
             }
         }
         let cli = reqwest::Client::new();
+        #[derive(Debug, Serialize)]
+        struct Q {
+            gid: Uuid,
+        }
         let resp = cli
-            .get(self.tx.query_prepared)
-            .query(&[("gid", self.gid)])
+            .get(self.tx.query_prepared())
+            .query(&Q { gid: self.tx.gid() })
             .send()
             .await?;
         // resp, err := common.RestyClient.R().SetQueryParam("gid", t.Gid).Get(t.QueryPrepared)

@@ -36,8 +36,8 @@ impl From<TransactionCreation> for Transaction {
             committed_at: None,
             finished_at: None,
             rollbacked_at: None,
-            next_cron_time: None,
-            next_cron_interval: -1,
+            scheduled_at: None,
+            delay: -1,
             created_at: Local::now(),
             last_modified: Local::now(),
         }
@@ -54,8 +54,8 @@ pub struct Transaction {
     committed_at: Option<DateTime<Local>>,
     finished_at: Option<DateTime<Local>>,
     rollbacked_at: Option<DateTime<Local>>,
-    next_cron_interval: i64,
-    next_cron_time: Option<DateTime<Local>>,
+    delay: i64,
+    scheduled_at: Option<DateTime<Local>>,
     created_at: DateTime<Local>,
     last_modified: DateTime<Local>,
 }
@@ -71,8 +71,8 @@ impl Transaction {
             committed_at: None,
             finished_at: None,
             rollbacked_at: None,
-            next_cron_interval: -1,
-            next_cron_time: None,
+            delay: -1,
+            scheduled_at: None,
             created_at: Local::now(),
             last_modified: Local::now(),
         }
@@ -98,6 +98,10 @@ impl Transaction {
         &self.r#type
     }
 
+    pub fn query_prepared(&self) -> &str {
+        &self.query_prepared
+    }
+
     pub fn submitted(&mut self) {
         self.state = State::Submitted;
     }
@@ -112,45 +116,34 @@ impl Transaction {
         Ok(branches)
     }
 
-    fn set_next_cron(&mut self, expire_in: i64) {
+    fn set_scheduled_at(&mut self, delay: i64) {
         let config = CONFIG.get().unwrap();
-        self.next_cron_interval = expire_in;
-        let next_cron_time = Local::now() + Duration::seconds(config.cron_interval);
-        self.next_cron_time.replace(next_cron_time);
+        self.delay = delay;
+        let scheduled_at = Local::now() + Duration::seconds(config.delay);
+        self.scheduled_at.replace(scheduled_at);
     }
 
-    pub async fn touch(&mut self, db: &Conn, interval: i64) -> Result<(), errors::Error> {
+    pub async fn touch(&mut self, db: &Conn, delay: i64) -> Result<(), errors::Error> {
         event!(Level::TRACE, action = "touch transaction", gid = ?self.gid, state = "", branch = "");
-        self.set_next_cron(interval);
-        let next_cron_time: DateTime<Utc> =
-            self.next_cron_time.as_ref().unwrap().with_timezone(&Utc);
+        self.set_scheduled_at(delay);
+        let scheduled_at: DateTime<Utc> = self.scheduled_at.as_ref().unwrap().with_timezone(&Utc);
         let x = Update::table(Self::tablename())
-            .set("next_cron_time", next_cron_time)
-            .set("next_cron_interval", self.next_cron_interval)
+            .set("scheduled_at", scheduled_at)
+            .set("delay", self.delay)
             .so_that("gid".equals(self.gid));
         db.update(x).await?;
         Ok(())
-        /*
-        db.execute(
-            sqlx::query("UPDATE ? SET next_cron_time = ?, next_cron_interval = ? WHERE gid = ?")
-                .bind(self.next_cron_time)
-                .bind(self.next_cron_interval)
-                .bind(self.gid),
-        )?;
-        */
-        // db.Model(&TransGlobal{}).Where("gid=?", t.Gid).Select(updates).Updates(t)
     }
 
     pub async fn update_state(&mut self, db: &Conn, state: State) -> Result<(), errors::Error> {
         event!(Level::TRACE, gid = ?self.gid, action= "change state", state= ?state, branch= "");
         let config = CONFIG.get().unwrap();
         let old = self.state;
-        self.set_next_cron(config.cron_interval);
-        let next_cron_time: DateTime<Utc> =
-            self.next_cron_time.as_ref().unwrap().with_timezone(&Utc);
+        self.set_scheduled_at(config.delay);
+        let scheduled_at: DateTime<Utc> = self.scheduled_at.as_ref().unwrap().with_timezone(&Utc);
         let mut x = Update::table(Self::tablename())
-            .set("next_cron_time", next_cron_time)
-            .set("next_cron_interval", self.next_cron_interval)
+            .set("scheduled_at", scheduled_at)
+            .set("delay", self.delay)
             .set("state", state)
             .so_that("gid".equals(self.gid));
         let now = Local::now();
@@ -253,6 +246,10 @@ impl TransactionBranch {
         &self.payload
     }
 
+    pub fn branch_id(&self) -> Gid {
+        self.branch_id
+    }
+
     pub fn with_type(&mut self, r#type: String) {
         self.r#type = r#type;
     }
@@ -283,6 +280,14 @@ pub trait Processor {
     fn branches(&self) -> Vec<TransactionBranch>;
     async fn once(&self, db: &Conn, branches: &[TransactionBranch]) -> Result<(), errors::Error>;
     async fn exec(&self, db: &Conn, branch: &TransactionBranch) -> Result<(), errors::Error>;
+}
+
+#[derive(Debug, Serialize)]
+pub struct BranchParam {
+    gid: Gid,
+    branch_id: Gid,
+    r#type: String,
+    branch_type: String,
 }
 
 // type ProcessorCreator = ;
@@ -326,19 +331,19 @@ impl Transaction {
         Ok(())
     }
 
-    pub fn get_branch_params(&self, branch: &TransactionBranch) -> HashMap<String, uuid::Uuid> {
-        let mut params = HashMap::with_capacity(4);
-        params.insert("gid".to_string(), self.gid);
-        // params.insert("trans_type",  self.r#type);
-        params.insert("branch_id".to_string(), branch.branch_id);
-        // params.insert("branch_type", branch.r#type);
-        params
+    pub fn branch_params(&self, branch: &TransactionBranch) -> BranchParam {
+        BranchParam {
+            gid: self.gid,
+            r#type: self.r#type.to_string(),
+            branch_id: branch.branch_id(),
+            branch_type: branch.r#type().to_string(),
+        }
     }
 
     pub async fn save(&mut self, db: &Conn) -> Result<(), errors::Error> {
         let config = CONFIG.get().unwrap();
         let db = db.start_transaction().await?;
-        self.set_next_cron(config.cron_interval);
+        self.set_scheduled_at(config.delay);
         event!(Level::DEBUG, gid = ?self.gid, action = "create transaction", state = ?self.state, branch = "", payload = ?self.payload);
         // r#type: String,
         // data: String,
@@ -348,7 +353,7 @@ impl Transaction {
         // finished_at: Option<DateTime<Local>>,
         // rollbacked_at: Option<DateTime<Local>>,
         // next_cron_interval: i64,
-        // next_cron_time: Option<DateTime<Local>>,
+        // scheduled_at: Option<DateTime<Local>>,
         // created_at: DateTime<Local>,
         // last_modified: DateTime<Local>,
         let insertion = Insert::single_into(Transaction::tablename())
@@ -390,11 +395,11 @@ impl Transaction {
             }
         } else if self.state == State::Submitted {
             // 如果数据库已经存放了prepared的事务，则修改状态
-            let next_cron_time: DateTime<Utc> =
-                self.next_cron_time.as_ref().unwrap().with_timezone(&Utc);
+            let scheduled_at: DateTime<Utc> =
+                self.scheduled_at.as_ref().unwrap().with_timezone(&Utc);
             let up = Update::table(Transaction::tablename())
-                .set("next_cron_time", next_cron_time)
-                .set("next_cron_interval", self.next_cron_interval)
+                .set("scheduled_at", scheduled_at)
+                .set("delay", self.delay)
                 .set("state", self.state)
                 .so_that("gid".equals(self.gid));
             db.update(up).await?;
