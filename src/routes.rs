@@ -50,10 +50,8 @@ async fn submit(_v: Versioning<1, 0>, db: DB, gid: Uuid) -> Result<String, error
     }
     tx.submitted();
     tx.save(db.as_ref()).await?;
-    // tokio::spawn(async move { dbg!(&tx); dbg!(tx.processor()); tx.process(&db); });
     let db = db.into();
-    tx.process(&db).await;
-    tokio::task::spawn(async move {  });
+    tokio::task::spawn(async move { tx.process(&db).await.unwrap(); });
     Ok("SUCCESS".to_string())
 }
 
@@ -73,7 +71,7 @@ async fn abort(_v: Versioning<1, 0>, db: DB, gid: Uuid) -> Result<String, errors
             tx.state()
         ));
     }
-    tokio::task::spawn_local(async move { tx.process(db.as_ref()).await });
+    tokio::task::spawn(async move { tx.process(db.as_ref()).await.unwrap() });
     Ok("SUCCESS".to_string())
 }
 
