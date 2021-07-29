@@ -8,7 +8,7 @@ use crate::config::CONFIG;
 use crate::errors;
 use crate::models::transaction::{State, Transaction, TransactionBranch};
 
-use super::Processor;
+use super::{Message, MessageStep, Processor};
 
 type Conn = PooledConnection;
 
@@ -25,23 +25,23 @@ impl<'tx> Processor<'tx> for TxMessageProcessor<'tx> {
     }
 
     fn branches(&self) -> Vec<TransactionBranch> {
-        let steps: Vec<HashMap<String, String>> = serde_json::from_str(self.tx.payload()).unwrap();
-        let mut branches = Vec::with_capacity(steps.len());
+        let steps: Vec<MessageStep> = serde_json::from_str(self.tx.payload()).unwrap();
+        let mut branches = Vec::with_capacity(3);
         for step in steps {
             branches.push(TransactionBranch::new(
                 self.tx.gid(),
                 uuid::Uuid::new_v4(),
                 "action".to_string(),
                 State::Prepared,
-                step.get("action").unwrap().to_string(),
-                step.get("payload").unwrap().to_string(),
+                step.callback.to_string(),
+                step.payload.to_string(),
             ));
         }
         branches
     }
 
     async fn exec(&mut self, db: &Conn, branch: &TransactionBranch) -> Result<(), errors::Error> {
-        let mut cli = reqwest::Client::new();
+        let cli = reqwest::Client::new();
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             reqwest::header::CONTENT_TYPE,
@@ -85,7 +85,6 @@ impl<'tx> Processor<'tx> for TxMessageProcessor<'tx> {
             }
         }
         for branch in branches {
-            // if branch.BranchType != "action" || branch.Status != "prepared" {
             match (branch.r#type(), branch.state()) {
                 ("action", State::Prepared) => {
                     //
@@ -110,7 +109,7 @@ impl<'tx> Processor<'tx> for TxMessageProcessor<'tx> {
 }
 
 impl<'a> TxMessageProcessor<'a> {
-    async fn maybe_query_prepared(&self, db: &Conn) -> Result<bool, errors::Error> {
+    async fn maybe_query_prepared(&mut self, db: &Conn) -> Result<bool, errors::Error> {
         match self.tx.state() {
             State::Prepared => {
                 // Only accept this.
@@ -129,6 +128,7 @@ impl<'a> TxMessageProcessor<'a> {
             .query(&Q { gid: self.tx.gid() })
             .send()
             .await?;
+        dbg!(&resp);
         // resp, err := common.RestyClient.R().SetQueryParam("gid", t.Gid).Get(t.QueryPrepared)
         // body := resp.String()
         // if strings.Contains(body, "SUCCESS") {
@@ -136,6 +136,8 @@ impl<'a> TxMessageProcessor<'a> {
         // } else {
         // 	t.touch(db, t.NextCronInterval*2)
         // }
+        let config = CONFIG.get().unwrap();
+        self.tx.touch(db, config.delay).await?;
         Ok(true)
     }
 }

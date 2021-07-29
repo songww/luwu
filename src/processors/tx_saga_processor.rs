@@ -5,7 +5,7 @@ use quaint::pooled::PooledConnection;
 use crate::errors;
 use crate::models::transaction::{Gid, State, Transaction, TransactionBranch};
 
-use super::Processor;
+use super::{Processor, SagaStep};
 
 type Conn = PooledConnection;
 
@@ -22,21 +22,27 @@ impl<'tx> Processor<'tx> for TxSagaProcessor<'tx> {
     }
 
     fn branches(&self) -> Vec<TransactionBranch> {
-        let steps: Vec<HashMap<String, String>> = serde_json::from_str(self.tx.payload()).unwrap();
+        let steps: Vec<SagaStep> = serde_json::from_str(self.tx.payload()).unwrap();
         let mut branches = Vec::with_capacity(steps.len());
         for step in steps.iter() {
             // let branch_id = format!("{:02}", i + 1);
             let branch_id = Gid::new_v4();
-            for r#type in ["compensate", "action"] {
-                branches.push(TransactionBranch::new(
-                    self.tx.gid(),
-                    branch_id,
-                    r#type.to_string(),
-                    State::Prepared,
-                    step.get(r#type).unwrap().to_string(),
-                    step.get("payload").unwrap().to_string(),
-                ));
-            }
+            branches.push(TransactionBranch::new(
+                self.tx.gid(),
+                branch_id,
+                "on_reverting".to_string(),
+                State::Prepared,
+                step.on_reverting().to_string(),
+                step.payload.to_string(),
+            ));
+            branches.push(TransactionBranch::new(
+                self.tx.gid(),
+                branch_id,
+                "on_committing".to_string(),
+                State::Prepared,
+                step.on_committing().to_string(),
+                step.payload.to_string(),
+            ));
         }
         branches
     }

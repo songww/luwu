@@ -190,9 +190,9 @@ struct Tx {
 
 pub fn routes() -> Vec<rocket::Route> {
     routes![
+        gid,
         fetch_transaction,
         create_transaction,
-        gid,
         create_tcc_branches,
         create_xa_branches,
         submit,
