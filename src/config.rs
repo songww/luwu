@@ -16,4 +16,14 @@ impl Default for Config {
     }
 }
 
+impl Config {
+    pub fn database_url(&self) -> &str {
+        &self.database_url
+    }
+
+    pub fn delay(&self) -> i64 {
+        self.delay
+    }
+}
+
 pub static CONFIG: OnceCell<Config> = OnceCell::new();

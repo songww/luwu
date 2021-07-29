@@ -1,6 +1,3 @@
-use std::collections::HashMap;
-use std::sync::Mutex;
-
 use chrono::prelude::*;
 use chrono::Duration;
 use quaint::pooled::PooledConnection;
@@ -11,12 +8,11 @@ use tracing::{debug, event, Level};
 use crate::config::CONFIG;
 use crate::errors;
 
+use crate::processors::{Processor, ProcessorType};
+
 pub type Gid = rocket::serde::uuid::Uuid;
 
 type Conn = PooledConnection;
-
-pub static CREATORS: Mutex<HashMap<String, Box<dyn Fn(&Transaction) -> Box<dyn Processor>>>> =
-    Mutex::new(HashMap::new());
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct TransactionCreation {
@@ -167,8 +163,9 @@ impl Transaction {
         Ok(())
     }
 
-    pub fn processor(&self) -> Box<dyn Processor> {
-        return CREATORS.lock().unwrap().get_mut(&self.r#type).unwrap()(&self);
+    pub fn processor<'tx>(&'tx mut self) -> Box<dyn Processor<'tx> + 'tx> {
+        let ptype: ProcessorType = self.r#type.parse().unwrap();
+        ptype.take_processor(self)
     }
 }
 
@@ -275,12 +272,6 @@ impl TransactionBranch {
     }
 }
 
-#[async_trait]
-pub trait Processor {
-    fn branches(&self) -> Vec<TransactionBranch>;
-    async fn once(&self, db: &Conn, branches: &[TransactionBranch]) -> Result<(), errors::Error>;
-    async fn exec(&self, db: &Conn, branch: &TransactionBranch) -> Result<(), errors::Error>;
-}
 
 #[derive(Debug, Serialize)]
 pub struct BranchParam {
@@ -288,16 +279,6 @@ pub struct BranchParam {
     branch_id: Gid,
     r#type: String,
     branch_type: String,
-}
-
-// type ProcessorCreator = ;
-
-// var processorFac = map[string]processorCreator{}
-pub fn add_processor_creator(
-    r#type: String,
-    creator: Box<dyn Fn(&Transaction) -> Box<dyn Processor>>,
-) {
-    CREATORS.lock().unwrap().insert(r#type, creator);
 }
 
 impl Transaction {
@@ -327,7 +308,7 @@ impl Transaction {
             )
             .await?,
         )?;
-        self.processor().once(db, &branches);
+        self.processor().once(db, &branches).await?;
         Ok(())
     }
 
@@ -426,17 +407,17 @@ impl Transaction {
 }
 
 struct Defer {
-    doit: Box<dyn FnOnce()>,
+    doit: Option<Box<dyn FnOnce()>>,
 }
 
 impl Drop for Defer {
     fn drop(&mut self) {
-        (self.doit)()
+        self.doit.take().unwrap()()
     }
 }
 
 impl Defer {
     fn new(doit: Box<dyn FnOnce()>) -> Self {
-        Defer { doit }
+        Defer { doit: Some(doit) }
     }
 }

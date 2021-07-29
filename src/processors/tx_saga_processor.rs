@@ -3,32 +3,28 @@ use std::collections::HashMap;
 use quaint::pooled::PooledConnection;
 
 use crate::errors;
+use crate::models::transaction::{Gid, State, Transaction, TransactionBranch};
 
-use super::transaction::{
-    add_processor_creator, Gid, Processor, State, Transaction, TransactionBranch,
-};
+use super::Processor;
 
 type Conn = PooledConnection;
 
+#[derive(Debug)]
 pub struct TxSagaProcessor<'tx> {
-    tx: &'tx Transaction,
-}
-
-impl<'tx> TxSagaProcessor<'tx> {
-    pub fn regist() {
-        add_processor_creator(
-            "saga".to_string(),
-            Box::new(|tx: &Transaction| -> Box<dyn Processor> { Box::new(TxSagaProcessor { tx }) }),
-        )
-    }
+    tx: &'tx mut Transaction,
 }
 
 #[async_trait]
-impl<'tx> Processor for TxSagaProcessor<'tx> {
+impl<'tx> Processor<'tx> for TxSagaProcessor<'tx> {
+    fn with_transaction(tx: &'tx mut Transaction) -> Box<dyn Processor<'tx> + Send + 'tx>
+    where Self: Sized {
+        Box::new(TxSagaProcessor { tx })
+    }
+
     fn branches(&self) -> Vec<TransactionBranch> {
         let steps: Vec<HashMap<String, String>> = serde_json::from_str(self.tx.payload()).unwrap();
         let mut branches = Vec::with_capacity(steps.len());
-        for (i, step) in steps.iter().enumerate() {
+        for step in steps.iter() {
             // let branch_id = format!("{:02}", i + 1);
             let branch_id = Gid::new_v4();
             for r#type in ["compensate", "action"] {
@@ -45,7 +41,7 @@ impl<'tx> Processor for TxSagaProcessor<'tx> {
         branches
     }
 
-    async fn exec(&self, db: &Conn, branch: &TransactionBranch) -> Result<(), errors::Error> {
+    async fn exec(&mut self, db: &Conn, branch: &TransactionBranch) -> Result<(), errors::Error> {
         let cli = reqwest::Client::new();
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
@@ -78,7 +74,7 @@ impl<'tx> Processor for TxSagaProcessor<'tx> {
         Ok(())
     }
 
-    async fn once(&self, db: &Conn, branches: &[TransactionBranch]) -> Result<(), errors::Error> {
+    async fn once(&mut self, db: &Conn, branches: &[TransactionBranch]) -> Result<(), errors::Error> {
         match self.tx.state() {
             State::Submitted => {}
             _ => {

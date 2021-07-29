@@ -1,36 +1,23 @@
-#![feature(const_generics_defaults)]
-
 #[macro_use]
 extern crate rocket;
-
-use std::io::Cursor;
 
 use figment::{
     providers::{Env, Format, Serialized, Toml},
     Figment, Profile,
 };
-#[cfg(feature = "msgpack")]
-use rmps;
-use rocket::fairing::{AdHoc, Fairing, Info, Kind};
-use rocket::http::{ContentType, MediaType, Status};
-use rocket::request::{self, FromRequest, Request};
-#[cfg(feature = "json")]
-use rocket::response::content::Json;
-#[cfg(feature = "msgpack")]
-use rocket::response::content::MsgPack;
-use rocket::response::{self, Responder, Response};
-use rocket::serde::{Deserialize, Serialize};
+use rocket::{fairing::{AdHoc, Fairing, Info, Kind}};
+use rocket::request::Request;
+use rocket::response::Response;
+use rocket::serde::Serialize;
 use rocket::tokio::time::Instant;
 use rocket::Data;
-#[cfg(feature = "json")]
-use serde_json;
 use tracing::{error, span};
 // use tracing_futures::WithSubscriber;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::prelude::*;
 
 use luwu::config::{Config, CONFIG};
-use luwu::database::{DatabaseManager, DB};
+use luwu::database::DatabaseManager;
 use luwu::responder::DynResponse;
 
 #[cfg(feature = "telemetry")]
@@ -134,7 +121,8 @@ fn rocket() -> _ {
         .attach(AdHoc::config::<Config>())
         .attach(RequestTimer)
         .attach(DatabaseManager)
-        .attach(AdHoc::on_ignite("Saving config", |rocket| {
-            CONFIG.set(rocket.state::<Config>().unwrap().clone())
+        .attach(AdHoc::on_ignite("Saving config", |rocket| async move {
+            CONFIG.set(rocket.state::<Config>().unwrap().clone()).unwrap();
+            rocket
         }))
 }

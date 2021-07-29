@@ -11,6 +11,8 @@ pub enum Error {
     DBError(#[from] quaint::error::Error),
     #[error("Database dose not configured.")]
     DBNotAvailable,
+    #[error("Processor type is invalid, expect one of `xa`, `tcc`, `saga`, `message`, but `{0}` found.")]
+    InvalidProcessorType(String),
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -19,7 +21,7 @@ struct ErrResponse {
 }
 
 impl<'r> Responder<'r, 'static> for Error {
-    fn respond_to(self, request: &'r rocket::Request<'_>) -> rocket::response::Result<'static> {
+    fn respond_to(self, _request: &'r rocket::Request<'_>) -> rocket::response::Result<'static> {
         let resp = ErrResponse {
             message: self.to_string(),
         };

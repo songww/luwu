@@ -3,31 +3,29 @@ use std::collections::HashMap;
 use quaint::pooled::PooledConnection;
 
 use crate::errors;
+use crate::models::transaction::{State, Transaction, TransactionBranch};
 
-use super::transaction::{add_processor_creator, Processor, State, Transaction, TransactionBranch};
+use super::Processor;
 
 type Conn = PooledConnection;
 
-struct TxTCCProcessor<'tx> {
-    tx: &'tx Transaction,
-}
-
-impl<'tx> TxTCCProcessor<'tx> {
-    pub fn regist() {
-        add_processor_creator(
-            "tcc".to_string(),
-            Box::new(|tx: &Transaction| -> Box<dyn Processor> { Box::new(TxTCCProcessor { tx }) }),
-        );
-    }
+#[derive(Debug)]
+pub struct TxTCCProcessor<'tx> {
+    tx: &'tx mut Transaction,
 }
 
 #[async_trait]
-impl<'tx> Processor for TxTCCProcessor<'tx> {
+impl<'tx> Processor<'tx> for TxTCCProcessor<'tx> {
+    fn with_transaction(tx: &'tx mut Transaction) -> Box<dyn Processor<'tx> + Send + 'tx>
+    where Self: Sized {
+        Box::new(TxTCCProcessor { tx })
+    }
+
     fn branches(&self) -> Vec<TransactionBranch> {
         Vec::new()
     }
 
-    async fn exec(&self, db: &Conn, branch: &TransactionBranch) -> Result<(), errors::Error> {
+    async fn exec(&mut self, db: &Conn, branch: &TransactionBranch) -> Result<(), errors::Error> {
         let cli = reqwest::Client::new();
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
@@ -61,7 +59,7 @@ impl<'tx> Processor for TxTCCProcessor<'tx> {
         Ok(())
     }
 
-    async fn once(&self, db: &Conn, branches: &[TransactionBranch]) -> Result<(), errors::Error> {
+    async fn once(&mut self, db: &Conn, branches: &[TransactionBranch]) -> Result<(), errors::Error> {
         let r#type = match self.tx.state() {
             State::Succeed | State::Failed => {
                 return Ok(());

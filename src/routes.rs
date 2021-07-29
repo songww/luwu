@@ -7,6 +7,7 @@ engine.POST("/api/dtmsvr/prepare", common.WrapHandler(prepare))
     engine.GET("/api/dtmsvr/query", common.WrapHandler(query))
     engine.GET("/api/dtmsvr/newGid", common.WrapHandler(newGid))
 */
+use rocket::tokio;
 use rocket::serde::{json::Json, uuid::Uuid};
 use rocket_versioning::Versioning;
 use serde::{Deserialize, Serialize};
@@ -58,7 +59,8 @@ async fn submit(_v: Versioning<1, 0>, db: DB, gid: Uuid) -> Result<String, error
     }
     tx.submitted();
     tx.save(db.as_ref()).await?;
-    tokio::spawn(async move { tx.process(db.as_ref()).await });
+    tokio::spawn(async move { dbg!(&tx); dbg!(tx.processor()); tx.process(&db); });
+    // tokio::spawn(async move { tx.process(db.as_ref()).await });
     Ok("SUCCESS".to_string())
 }
 
@@ -78,7 +80,7 @@ async fn abort(_v: Versioning<1, 0>, db: DB, gid: Uuid) -> Result<String, errors
             tx.state()
         ));
     }
-    tokio::spawn(async move { tx.process(db.as_ref()).await });
+    // tokio::spawn(async move { tx.process(db.as_ref()).await });
     Ok("SUCCESS".to_string())
 }
 

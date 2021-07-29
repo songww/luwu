@@ -2,31 +2,29 @@ use quaint::pooled::PooledConnection;
 use serde::Serialize;
 
 use crate::errors;
+use crate::models::transaction::{State, Transaction, TransactionBranch};
 
-use super::transaction::{add_processor_creator, Processor, State, Transaction, TransactionBranch};
+use super::Processor;
 
 type Conn = PooledConnection;
 
-struct TxXaProcessor<'tx> {
-    tx: &'tx Transaction,
-}
-
-impl<'tx> TxXaProcessor<'tx> {
-    pub fn regist() {
-        add_processor_creator(
-            "xa".to_string(),
-            Box::new(|tx: &Transaction| -> Box<dyn Processor> { Box::new(TxXaProcessor { tx }) }),
-        );
-    }
+#[derive(Debug)]
+pub struct TxXaProcessor<'tx> {
+    tx: &'tx mut Transaction,
 }
 
 #[async_trait]
-impl<'tx> Processor for TxXaProcessor<'tx> {
+impl<'tx> Processor<'tx> for TxXaProcessor<'tx> {
+    fn with_transaction(tx: &'tx mut Transaction) -> Box<dyn Processor<'tx> + Send + 'tx>
+    where Self: Sized {
+        Box::new(TxXaProcessor { tx })
+    }
+
     fn branches(&self) -> Vec<TransactionBranch> {
         Vec::new()
     }
 
-    async fn exec(&self, db: &Conn, branch: &TransactionBranch) -> Result<(), errors::Error> {
+    async fn exec(&mut self, db: &Conn, branch: &TransactionBranch) -> Result<(), errors::Error> {
         #[derive(Debug, Serialize)]
         struct Payload {
             gid: uuid::Uuid,
@@ -55,7 +53,7 @@ impl<'tx> Processor for TxXaProcessor<'tx> {
         Ok(())
     }
 
-    async fn once(&self, db: &Conn, branches: &[TransactionBranch]) -> Result<(), errors::Error> {
+    async fn once(&mut self, db: &Conn, branches: &[TransactionBranch]) -> Result<(), errors::Error> {
         let r#type = match self.tx.state() {
             State::Succeed => {
                 return Ok(());
@@ -64,8 +62,8 @@ impl<'tx> Processor for TxXaProcessor<'tx> {
             _ => "rollback",
         };
         for branch in branches {
-            match (branch.r#type(), branch.state()) {
-                (r#type, State::Succeed) => {
+            match (branch.r#type() == r#type, branch.state()) {
+                (true, State::Succeed) => {
                     self.exec(db, branch).await;
                 }
                 _ => {}

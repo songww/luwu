@@ -4,29 +4,26 @@ use quaint::pooled::PooledConnection;
 use rocket::serde::uuid::Uuid;
 use serde::Serialize;
 
+use crate::config::CONFIG;
 use crate::errors;
+use crate::models::transaction::{State, Transaction, TransactionBranch};
 
-use super::transaction::{add_processor_creator, Processor, State, Transaction, TransactionBranch};
+use super::Processor;
 
 type Conn = PooledConnection;
 
-struct TxMessageProcessor<'tx> {
-    tx: &'tx Transaction,
-}
-
-impl<'tx> TxMessageProcessor<'tx> {
-    pub fn regist() {
-        add_processor_creator(
-            "message".to_string(),
-            Box::new(|tx: &Transaction| -> Box<dyn Processor> {
-                Box::new(TxMessageProcessor { tx })
-            }),
-        )
-    }
+#[derive(Debug)]
+pub struct TxMessageProcessor<'tx> {
+    tx: &'tx mut Transaction,
 }
 
 #[async_trait]
-impl<'tx> Processor for TxMessageProcessor<'tx> {
+impl<'tx> Processor<'tx> for TxMessageProcessor<'tx> {
+    fn with_transaction(tx: &'tx mut Transaction) -> Box<dyn Processor<'tx> + Send + 'tx>
+    where Self: Sized {
+        Box::new(TxMessageProcessor { tx })
+    }
+
     fn branches(&self) -> Vec<TransactionBranch> {
         let steps: Vec<HashMap<String, String>> = serde_json::from_str(self.tx.payload()).unwrap();
         let mut branches = Vec::with_capacity(steps.len());
@@ -37,13 +34,13 @@ impl<'tx> Processor for TxMessageProcessor<'tx> {
                 "action".to_string(),
                 State::Prepared,
                 step.get("action").unwrap().to_string(),
-                step.get("message").unwrap().to_string(),
+                step.get("payload").unwrap().to_string(),
             ));
         }
         branches
     }
 
-    async fn exec(&self, db: &Conn, branch: &TransactionBranch) -> Result<(), errors::Error> {
+    async fn exec(&mut self, db: &Conn, branch: &TransactionBranch) -> Result<(), errors::Error> {
         let mut cli = reqwest::Client::new();
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
@@ -72,10 +69,12 @@ impl<'tx> Processor for TxMessageProcessor<'tx> {
             panic(fmt.Errorf("unknown response: %s, will be retried", body))
         }
         */
+        let config = CONFIG.get().unwrap();
+        self.tx.touch(db, config.delay).await?;
         Ok(())
     }
 
-    async fn once(&self, db: &Conn, branches: &[TransactionBranch]) -> Result<(), errors::Error> {
+    async fn once(&mut self, db: &Conn, branches: &[TransactionBranch]) -> Result<(), errors::Error> {
         self.maybe_query_prepared(db).await?;
         match self.tx.state() {
             State::Submitted => {
@@ -101,7 +100,7 @@ impl<'tx> Processor for TxMessageProcessor<'tx> {
                     // break;
                 }
                 _ => {
-                    return Err("Message go pass all branch".to_string());
+                    // return Err("Message go pass all branch".to_string());
                 }
             }
         }

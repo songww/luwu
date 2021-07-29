@@ -11,4 +11,5 @@ pub mod models;
 pub mod responder;
 pub mod routes;
 
+mod processors;
 // mod migrations;

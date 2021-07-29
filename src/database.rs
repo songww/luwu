@@ -1,3 +1,4 @@
+use once_cell::sync::OnceCell;
 use rocket::fairing::{Fairing, Info, Kind};
 use rocket::http::Status;
 use rocket::request::{self, FromRequest, Request};
@@ -5,8 +6,9 @@ use rocket::request::{self, FromRequest, Request};
 use crate::config::Config;
 use crate::errors;
 
-#[derive(Deref, DerefMut)]
-pub struct DatabaseManager(quaint::pooled::Quaint);
+static POOL: OnceCell<quaint::pooled::Quaint> = OnceCell::new();
+
+pub struct DatabaseManager;
 
 #[rocket::async_trait]
 impl Fairing for DatabaseManager {
@@ -18,7 +20,10 @@ impl Fairing for DatabaseManager {
     }
 
     async fn on_liftoff(&self, rocket: &rocket::Rocket<rocket::Orbit>) {
-        println!("-------> config: {:?}", rocket.state::<Config>());
+        let config = rocket.state::<Config>().unwrap();
+        let mut builder = quaint::pooled::Quaint::builder(config.database_url()).expect("Can not connect to database.");
+        builder.test_on_check_out(true);
+        POOL.set(builder.build());
     }
 }
 
@@ -34,7 +39,7 @@ impl<'r> FromRequest<'r> for DB {
     async fn from_request(request: &'r Request<'_>) -> request::Outcome<Self, Self::Error> {
         let outcome = request.guard::<&rocket::State<DatabaseManager>>().await;
         match outcome {
-            request::Outcome::Success(manager) => match manager.check_out().await {
+            request::Outcome::Success(_) => match POOL.get().unwrap().check_out().await {
                 Ok(conn) => request::Outcome::Success(DB(conn)),
                 Err(err) => request::Outcome::Failure((Status::ServiceUnavailable, err.into())),
             },
