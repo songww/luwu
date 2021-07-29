@@ -23,7 +23,7 @@ impl Fairing for DatabaseManager {
         let config = rocket.state::<Config>().unwrap();
         let mut builder = quaint::pooled::Quaint::builder(config.database_url()).expect("Can not connect to database.");
         builder.test_on_check_out(true);
-        POOL.set(builder.build());
+        POOL.set(builder.build()).ok();
     }
 }
 

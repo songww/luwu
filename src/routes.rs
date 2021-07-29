@@ -1,12 +1,3 @@
-/*
-engine.POST("/api/dtmsvr/prepare", common.WrapHandler(prepare))
-    engine.POST("/api/dtmsvr/submit", common.WrapHandler(submit))
-    engine.POST("/api/dtmsvr/registerXaBranch", common.WrapHandler(registerXaBranch))
-    engine.POST("/api/dtmsvr/registerTccBranch", common.WrapHandler(registerTccBranch))
-    engine.POST("/api/dtmsvr/abort", common.WrapHandler(abort))
-    engine.GET("/api/dtmsvr/query", common.WrapHandler(query))
-    engine.GET("/api/dtmsvr/newGid", common.WrapHandler(newGid))
-*/
 use rocket::tokio;
 use rocket::serde::{json::Json, uuid::Uuid};
 use rocket_versioning::Versioning;
@@ -59,14 +50,16 @@ async fn submit(_v: Versioning<1, 0>, db: DB, gid: Uuid) -> Result<String, error
     }
     tx.submitted();
     tx.save(db.as_ref()).await?;
-    tokio::spawn(async move { dbg!(&tx); dbg!(tx.processor()); tx.process(&db); });
-    // tokio::spawn(async move { tx.process(db.as_ref()).await });
+    // tokio::spawn(async move { dbg!(&tx); dbg!(tx.processor()); tx.process(&db); });
+    let db = db.into();
+    tx.process(&db).await;
+    tokio::task::spawn(async move {  });
     Ok("SUCCESS".to_string())
 }
 
 #[put("/transactions/<gid>/aborting")]
 async fn abort(_v: Versioning<1, 0>, db: DB, gid: Uuid) -> Result<String, errors::Error> {
-    let tx = Transaction::load(gid, db.as_ref()).await?;
+    let mut tx = Transaction::load(gid, db.as_ref()).await?;
     //
     if (tx.r#type() != "xa" && tx.r#type() != "tcc")
         || (match tx.state() {
@@ -80,7 +73,7 @@ async fn abort(_v: Versioning<1, 0>, db: DB, gid: Uuid) -> Result<String, errors
             tx.state()
         ));
     }
-    // tokio::spawn(async move { tx.process(db.as_ref()).await });
+    tokio::task::spawn_local(async move { tx.process(db.as_ref()).await });
     Ok("SUCCESS".to_string())
 }
 

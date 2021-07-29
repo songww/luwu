@@ -295,10 +295,11 @@ impl Transaction {
             }
         }));
         match (self.state, self.r#type.as_str()) {
-            (State::Prepared, "msg") => {
+            (State::Prepared, "message") => {
+            }
+            _ => {
                 self.update_state(db, State::Aborting).await?;
             }
-            _ => {}
         };
         let branches: Vec<TransactionBranch> = quaint::serde::from_rows(
             db.select(
@@ -308,7 +309,8 @@ impl Transaction {
             )
             .await?,
         )?;
-        self.processor().once(db, &branches).await?;
+        let mut processor = self.processor();
+        processor.once(db, &branches).await?;
         Ok(())
     }
 
@@ -406,6 +408,8 @@ impl Transaction {
     }
 }
 
+unsafe impl Send for Transaction {}
+
 struct Defer {
     doit: Option<Box<dyn FnOnce()>>,
 }
@@ -421,3 +425,5 @@ impl Defer {
         Defer { doit: Some(doit) }
     }
 }
+
+unsafe impl Send for Defer {}

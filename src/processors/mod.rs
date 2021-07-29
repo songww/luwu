@@ -16,7 +16,7 @@ pub use tx_saga_processor::TxSagaProcessor;
 pub use tx_message_processor::TxMessageProcessor;
 
 #[async_trait]
-pub trait Processor<'tx>: Debug {
+pub trait Processor<'tx>: Debug + Send {
     fn with_transaction(tx: &'tx mut Transaction) -> Box<dyn Processor<'tx> + Send + 'tx> where Self: Sized;
     fn branches(&self) -> Vec<TransactionBranch>;
     async fn once(&mut self, db: &Conn, branches: &[TransactionBranch]) -> Result<(), errors::Error>;
