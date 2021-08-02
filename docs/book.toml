@@ -1,0 +1,6 @@
+[book]
+authors = ["songww"]
+language = "zh-CN"
+multilingual = false
+src = "src"
+title = "luwu - A lightweight distributed transaction management service, support xa tcc saga."
