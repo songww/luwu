@@ -1,3 +1,1 @@
-# 陆吾
-
-A lightweight distributed transaction management service.
+docs/src/README.md
