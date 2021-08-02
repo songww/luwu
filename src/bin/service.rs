@@ -13,6 +13,7 @@ use rocket::tokio::time::Instant;
 use rocket::Data;
 use tracing::{error, span};
 // use tracing_futures::WithSubscriber;
+use tracing_futures::Instrument;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::prelude::*;
 
@@ -40,7 +41,10 @@ fn enable_tracing() {
     #[cfg(feature = "telemetry")]
     let subscriber = subscriber.with(telemetry());
     #[cfg(feature = "env-filter")]
-    let subscriber = subscriber.with(tracing_subscriber::EnvFilter::new("INFO"));
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    #[cfg(feature = "env-filter")]
+    let subscriber = subscriber.with(env_filter);
 
     let file_appender = tracing_appender::rolling::daily("logs", "tracing.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);

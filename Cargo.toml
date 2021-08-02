@@ -30,13 +30,25 @@ tracing = "0.1"
 tracing-appender = "0.1"
 tracing-futures = "0.2"
 tracing-opentelemetry = { version = "0.14", optional = true }
-tracing-subscriber = "0.2"
+tracing-subscriber = { version = "0.2" }
 uuid = { version = "0.8", features = [ "serde", "v4" ] }
 
 [features]
 json = [ "rocket/json" ]
 msgpack = [ "rocket/msgpack", "rmps" ]
 telemetry = [ "opentelemetry", "tracing-opentelemetry" ]
-env-filter = []
+env-filter = [ "tracing-subscriber/env-filter", "tracing-subscriber/registry" ]
 
 default = [ "json", "msgpack", "telemetry", "env-filter" ]
+
+[workspace]
+members = [
+    "cli"
+]
+
+[[example]]
+name = "simple"
+path = "examples/simple/main.rs"
+
+[dev-dependencies]
+clap = "3.0.0-beta.2"

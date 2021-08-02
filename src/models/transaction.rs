@@ -16,7 +16,7 @@ type Conn = PooledConnection;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct TransactionCreation {
-    r#type: String,
+    r#type: ProcessorType,
     payload: String,
     query_prepared: String,
 }
@@ -44,7 +44,7 @@ impl From<TransactionCreation> for Transaction {
 pub struct Transaction {
     gid: Gid,
     state: State,
-    r#type: String,
+    r#type: ProcessorType,
     payload: String,
     query_prepared: String,
     committed_at: Option<DateTime<Local>>,
@@ -57,6 +57,7 @@ pub struct Transaction {
 }
 
 impl Transaction {
+    /*
     pub fn new() -> Transaction {
         Transaction {
             gid: Gid::new_v4(),
@@ -73,6 +74,7 @@ impl Transaction {
             last_modified: Local::now(),
         }
     }
+    */
 
     pub fn tablename() -> &'static str {
         "tx_transactions"
@@ -90,7 +92,7 @@ impl Transaction {
         self.state
     }
 
-    pub fn r#type(&self) -> &str {
+    pub fn r#type(&self) -> &ProcessorType {
         &self.r#type
     }
 
@@ -134,7 +136,7 @@ impl Transaction {
     pub async fn update_state(&mut self, db: &Conn, state: State) -> Result<(), errors::Error> {
         event!(Level::TRACE, gid = ?self.gid, action= "change state", state= ?state, branch= "");
         let config = CONFIG.get().unwrap();
-        let old = self.state;
+        // let old = self.state;
         self.set_scheduled_at(config.delay);
         let scheduled_at: DateTime<Utc> = self.scheduled_at.as_ref().unwrap().with_timezone(&Utc);
         let mut x = Update::table(Self::tablename())
@@ -164,19 +166,30 @@ impl Transaction {
     }
 
     pub fn processor<'tx>(&'tx mut self) -> Box<dyn Processor<'tx> + 'tx> {
-        let ptype: ProcessorType = self.r#type.parse().unwrap();
-        ptype.take_processor(self)
+        self.r#type.take_processor()(self)
     }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Serialize)]
 #[repr(i64)]
 pub enum State {
-    Succeed = 1,
-    Submitted,
-    Failed,
+    Submitted = 1,
     Prepared, // "prepared"
     Aborting, // "aborting"
+    Failed,
+    Succeed,
+}
+
+impl State {
+    pub fn tag(&self) -> &str {
+        match self {
+            &State::Failed => "failed",
+            &State::Succeed => "succeed",
+            &State::Prepared => "prepared",
+            &State::Aborting => "aborting",
+            &State::Submitted => "submitted",
+        }
+    }
 }
 
 impl From<State> for Value<'static> {
@@ -274,10 +287,10 @@ impl TransactionBranch {
 
 
 #[derive(Debug, Serialize)]
-pub struct BranchParam {
+pub struct BranchParam<'a> {
     gid: Gid,
     branch_id: Gid,
-    r#type: String,
+    r#type: &'a ProcessorType,
     branch_type: String,
 }
 
@@ -294,8 +307,8 @@ impl Transaction {
                 // }
             }
         }));
-        match (self.state, self.r#type.as_str()) {
-            (State::Prepared, "message") => {
+        match (self.state, self.r#type()) {
+            (State::Prepared, &ProcessorType::Message(_)) => {
             }
             _ => {
                 self.update_state(db, State::Aborting).await?;
@@ -314,10 +327,10 @@ impl Transaction {
         Ok(())
     }
 
-    pub fn branch_params(&self, branch: &TransactionBranch) -> BranchParam {
+    pub fn branch_params<'a>(&'a self, branch: &TransactionBranch) -> BranchParam<'a> {
         BranchParam {
             gid: self.gid,
-            r#type: self.r#type.to_string(),
+            r#type: self.r#type(),
             branch_id: branch.branch_id(),
             branch_type: branch.r#type().to_string(),
         }

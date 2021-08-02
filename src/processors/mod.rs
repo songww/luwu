@@ -107,12 +107,21 @@ pub enum ProcessorType {
 }
 
 impl ProcessorType {
-    pub fn take_processor<'tx>(&self, tx: &'tx mut Transaction) -> Box<dyn Processor<'tx> + 'tx> {
+    pub fn take_processor<'tx>(&self) -> Box<dyn FnOnce(&'tx mut Transaction) -> Box<dyn Processor<'tx> + 'tx> + 'static> {
         match self {
-            ProcessorType::Xa(_) => TxXaProcessor::with_transaction(tx),
-            ProcessorType::TCC(_) => TxTCCProcessor::with_transaction(tx),
-            ProcessorType::Saga(_) => TxSagaProcessor::with_transaction(tx),
-            ProcessorType::Message(_) => TxMessageProcessor::with_transaction(tx)
+            ProcessorType::Xa(_) => Box::new(|tx| TxXaProcessor::with_transaction(tx)),
+            ProcessorType::TCC(_) => Box::new(|tx| TxTCCProcessor::with_transaction(tx)),
+            ProcessorType::Saga(_) => Box::new(|tx| TxSagaProcessor::with_transaction(tx)),
+            ProcessorType::Message(_) => Box::new(|tx| TxMessageProcessor::with_transaction(tx))
+        }
+    }
+
+    pub fn tag(&self) -> &str {
+        match self {
+            ProcessorType::Xa(_) => "xa",
+            ProcessorType::TCC(_) => "tcc",
+            ProcessorType::Saga(_) => "saga",
+            ProcessorType::Message(_) => "message"
         }
     }
 }

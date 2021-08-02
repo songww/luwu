@@ -3,9 +3,10 @@ use rocket::serde::{json::Json, uuid::Uuid};
 use rocket_versioning::Versioning;
 use serde::{Deserialize, Serialize};
 
+use crate::processors::ProcessorType;
 use crate::config::Config;
 use crate::database::DB;
-use crate::errors;
+use crate::errors::{self, ErrorResponse};
 use crate::models::transaction::{Gid, State, Transaction, TransactionBranch, TransactionCreation};
 use crate::responder::DynResponse;
 
@@ -14,7 +15,7 @@ async fn fetch_transaction(
     _v: Versioning<1, 0>,
     db: DB,
     gid: Uuid,
-) -> Result<DynResponse<Tx>, errors::Error> {
+) -> Result<DynResponse<Tx>, errors::ErrorResponse> {
     let tx = Transaction::load(gid, db.as_ref()).await?;
     let branches = tx.branches(db.as_ref()).await?;
     Ok(DynResponse::new(Tx { tx, branches }))
@@ -25,7 +26,7 @@ async fn create_transaction(
     _v: Versioning<1, 0>,
     db: DB,
     tx: Json<TransactionCreation>,
-) -> Result<String, errors::Error> {
+) -> Result<String, errors::ErrorResponse> {
     let mut tx = Transaction::from(tx.0);
     tx.save(db.as_ref()).await?;
     Ok(tx.gid().to_string())
@@ -37,15 +38,15 @@ fn gid(_v: Versioning<1, 0>) -> String {
 }
 
 #[put("/transactions/<gid>/submitting")]
-async fn submit(_v: Versioning<1, 0>, db: DB, gid: Uuid) -> Result<String, errors::Error> {
+async fn submit(_v: Versioning<1, 0>, db: DB, gid: Uuid) -> Result<String, errors::ErrorResponse> {
     let mut tx = Transaction::load(gid, db.as_ref()).await?;
     match tx.state() {
         State::Prepared | State::Submitted => {
             //
         }
         _ => {
-            // return M{"dtm_result": "FAILURE", "message": fmt.Sprintf("current status %s, cannot sumbmit", dbt.Status)}, nil
-            return Ok("failed".to_string());
+            let err = errors::Error::CannotSubmitTransaction(gid, tx.state().tag().to_string());
+            return Err(ErrorResponse::new(err, 5010));
         }
     }
     tx.submitted();
@@ -56,43 +57,44 @@ async fn submit(_v: Versioning<1, 0>, db: DB, gid: Uuid) -> Result<String, error
 }
 
 #[put("/transactions/<gid>/aborting")]
-async fn abort(_v: Versioning<1, 0>, db: DB, gid: Uuid) -> Result<String, errors::Error> {
+async fn abort(_v: Versioning<1, 0>, db: DB, gid: Uuid) -> Result<String, errors::ErrorResponse> {
     let mut tx = Transaction::load(gid, db.as_ref()).await?;
-    //
-    if (tx.r#type() != "xa" && tx.r#type() != "tcc")
-        || (match tx.state() {
-            State::Prepared | State::Aborting => false,
-            _ => true,
-        })
-    {
-        return Ok(format!(
-            "trans type: {} with state {:?}, is not abortable!",
-            tx.r#type(),
-            tx.state()
-        ));
+    match tx.r#type() {
+        &ProcessorType::Xa(_) | &ProcessorType::TCC(_) => {
+            //
+        },
+        _ => {
+            let err = errors::Error::UnexpectedType(tx.r#type().tag().to_string(), tx.state().tag().to_string(), "it is not abortable!".to_string());
+            return Err(ErrorResponse::new(err, 5020));
+        }
+    }
+    match tx.state() {
+        State::Prepared | State::Aborting => {},
+        _ => {
+            let err = errors::Error::UnexpectedType(tx.r#type().tag().to_string(), tx.state().tag().to_string(), "it is not abortable!".to_string());
+            return Err(ErrorResponse::new(err, 5020));
+        }
     }
     tokio::task::spawn(async move { tx.process(db.as_ref()).await.unwrap() });
     Ok("SUCCESS".to_string())
 }
 
-#[post("/transactions/<gid>/branches/xa", data = "<tb>")]
+#[post("/transactions/<gid>/branches", data = "<tb>")]
 async fn create_xa_branches(
     _v: Versioning<1, 0>,
     db: DB,
     config: &rocket::State<Config>,
     gid: Uuid,
     tb: Json<TransactionBranch>,
-) -> Result<String, errors::Error> {
+) -> Result<String, errors::ErrorResponse> {
     let mut tx = Transaction::load(gid, db.as_ref()).await?;
     match tx.state() {
         State::Prepared => {
             //
         }
         _ => {
-            return Ok(format!(
-                "current status: {:?} cannot register branch",
-                tx.state()
-            ));
+            let err = errors::Error::UnexpectedType(tx.r#type().tag().to_string(), tx.state().tag().to_string(), "is denied for branch registering.".to_string());
+            return Err(ErrorResponse::new(err, 5030));
         }
     }
     let mut branches = vec![tb.clone(), tb.clone()];
@@ -124,17 +126,15 @@ async fn create_tcc_branches(
     branch_id: Uuid,
     branch: Json<TCCBranchCreation>,
     config: &rocket::State<Config>,
-) -> Result<String, errors::Error> {
+) -> Result<String, errors::ErrorResponse> {
     let mut tx = Transaction::load(gid, db.as_ref()).await?;
     match tx.state() {
         State::Prepared => {
             //
         }
         _ => {
-            return Ok(format!(
-                "current status: {:?} cannot register branch",
-                tx.state()
-            ));
+            let err = errors::Error::UnexpectedType(tx.r#type().tag().to_string(), tx.state().tag().to_string(), "is denied for branch registering.".to_string());
+            return Err(ErrorResponse::new(err, 5030));
         }
     }
 

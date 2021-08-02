@@ -1,3 +1,4 @@
+use tracing::{debug, info};
 use serde::{Serialize,Desrialize};
 
 pub use luwu::processors::{Message,MessageStep};
@@ -30,7 +31,7 @@ impl Message {
     // prepare the message
     async fn prepare(&mut self, query_prepared: string) -> Result<(), ()> {
 	    // s.QueryPrepared = common.OrString(queryPrepared, s.QueryPrepared):
-	    debug!("preparing {} body: {}", self.gid, &self.paylaod);
+	    debug!("preparing {} body: {:?}", self.gid, &self.paylaod);
 	    // resp, err := common.RestyClient.R().SetBody(&s.MsgData).Post(fmt.Sprintf("%s/prepare", s.Server))
 	    // return CheckDtmResponse(resp, err)
         Ok(())
