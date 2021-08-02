@@ -43,7 +43,8 @@ default = [ "json", "msgpack", "telemetry", "env-filter" ]
 
 [workspace]
 members = [
-    "cli"
+    "cli",
+    "python"
 ]
 
 [[example]]
